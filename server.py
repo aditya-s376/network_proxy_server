@@ -1,0 +1,235 @@
+import socket
+import concurrent.futures
+import os
+import select
+
+HOST  = '0.0.0.0'
+PORT = 56000
+MAX_THREADS = 25
+TIMEOUT = 10
+BLACKLIST = "config/blocked_domains.txt"
+MAX_CONTENT_LENGTH = 10*1024*1024
+
+
+
+
+def load_blacklist(BLACKLIST):
+    blacklist = set()
+    try:
+        with open(BLACKLIST, 'r') as f:
+            for line in f:
+                clean_line = line.strip().lower()
+                if clean_line and not clean_line.startswith('#'):
+                    blacklist.add(clean_line)
+        print(f"[CONFIG] loaded the blacklist with {len(blacklist)} domains")
+    except FileNotFoundError:
+        print(f"Blacklist file not found at {BLACKLIST}")
+    except Exception as err:
+        print(f"Blacklist not loaded : {err}")
+    return blacklist
+
+the_blacklist = load_blacklist(BLACKLIST)
+
+
+
+
+
+
+def parse_request(request_data_raw):
+    decoded_req = request_data_raw.decode('utf-8', errors = 'ignore')
+    lines = decoded_req.split("\r\n")
+
+    request_line = lines[0]
+    
+    
+    parts = request_line.split(" ")
+    if len(parts) < 3:
+        return None, None, None, None
+    
+    method = parts[0]
+    url = parts[1]
+
+    # to exclude "https://" from the url
+    if "://" in url:
+        temp = url.split("://" , 1)
+        url = temp[1]
+    
+    # to find the string containing the host and the port
+    path_find = url.find("/")
+    if path_find == -1:
+        host_port = url
+        path = "/"
+    else:
+        host_port = url[:path_find]
+        path = url[path_find:]
+
+
+
+    # to get the host and the port requested
+    if ":" in host_port:
+        host = host_port.split(":")[0]
+        port = (host_port.split(":", 1)[1])
+        port = int(port)
+    else:
+        host = host_port
+        port = 80
+    
+    print(f'[REQUEST] Method: {method} | Host = {host} | Port = {port}')
+
+    
+    return method , host , port, path
+    
+
+
+
+
+def http_bridge(client_sock, host, port, request_data):
+
+    remote_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    remote_sock.settimeout(TIMEOUT)
+    try:
+        remote_sock.connect((host,port))
+        remote_sock.sendall(request_data)
+
+        while True:
+            response_packet = remote_sock.recv(4096)
+            if len(response_packet) > 0:
+                client_sock.sendall(response_packet)
+            else:
+                break
+    except socket.error as err:
+        print(f'Bridge failed with error: {err}')
+    finally:
+        remote_sock.close()
+        client_sock.close()
+        
+        print(f'connection closed')
+
+def https_tunnel(client_sock, remote_sock):
+    sockets_to_watch = [client_sock, remote_sock]
+    while True:
+        readable, _, _ = select.select(sockets_to_watch, [] , [] , TIMEOUT)
+
+        if not readable:
+            break
+
+        for sock in readable:
+            try:
+                data = sock.recv(4096)
+                if not data:
+                    return
+                if sock is client_sock:
+                    remote_sock.sendall(data)
+                else:
+                    client_sock.sendall(data)
+            except socket.error:
+                return
+            
+                
+
+
+
+def handle_client(client_sock):
+    request_data = b""
+    while b"\r\n\r\n" not in request_data:
+        packet = client_sock.recv(4096)
+        if not packet:
+            break
+        request_data += packet
+    
+    if request_data:
+        method, host, port , path = parse_request(request_data)
+        host = host.lower()
+    if not host:
+        client_sock.close()
+        return
+
+    # blacklist check
+    if host in the_blacklist:
+        print(f'[BLOCKED] {host}')
+ 
+        forbidden_response = (
+            b"HTTP/1.1 403 Forbidden\r\n"
+            b"Content-Type: text/plain\r\n"
+            b"Connection: close\r\n"
+            b"\r\n"
+            b"Error 403: The website you are trying to reach is blocked by this proxy."
+        )
+        client_sock.sendall(forbidden_response)
+        client_sock.close()
+        return
+    
+    if method == "POST":
+        
+        content_length = 0
+        header_str = request_data.decode('utf-8', errors='ignore')
+        for line in header_str.split("\r\n"):
+            if line.lower().startswith("content-length:"):
+                content_length = int(line.split(":")[1].strip())
+                break
+        if content_length > MAX_CONTENT_LENGTH:
+            print(f"[BLOCKED] Upload too large: {content_length} bytes")
+            client_sock.sendall(b"HTTP/1.1 413 Payload Too Large\r\n\r\n")
+            client_sock.close()
+            return
+
+        parts = request_data.split(b"\r\n\r\n" , 1)
+        current_body_len = len(parts[1]) if len(parts) > 1 else 0
+        while(current_body_len < content_length):
+            remaining  = content_length-current_body_len
+            body_packet = client_sock.recv(min(remaining, 4096))
+            if not body_packet:
+                break
+            request_data += body_packet
+            current_body_len += len(body_packet)
+
+            
+    if method == "CONNECT":
+        remote_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            remote_sock.connect((host,port))
+            client_sock.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+            https_tunnel(client_sock , remote_sock)
+        except Exception as err:
+            print(f"[HTTPS ERROR] {err}")
+        finally:
+            client_sock.close()
+            remote_sock.close()
+            return
+    else:
+        lines = request_data.split(b"\r\n")
+        lines[0] = f"{method} {path} HTTP/1.1".encode()
+        for i in range(1,len(lines)):
+            if lines[i].lower().startswith(b"connection:") or lines[i].lower().startswith(b"proxy-connection:"):
+                lines[i] = b"Connection: close"
+
+        final_request = b"\r\n".join(lines)
+        http_bridge(client_sock , host , port , final_request)
+    
+
+
+
+
+
+def start_proxy_server():
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind((HOST,PORT))
+    server.listen()
+    print('[INTITIATION] Server started and listening')
+    with concurrent.futures.ThreadPoolExecutor() as exec:
+        while True:
+            client_sock, addr = server.accept()
+            exec.submit(handle_client, client_sock)
+            print(f'[CONNECTION] Connection established with {client_sock}')
+
+if __name__ == "__main__":
+    start_proxy_server()
+
+
+
+
+
+        
+
+
+
