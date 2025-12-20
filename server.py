@@ -47,8 +47,13 @@ def load_blacklist(BLACKLIST):
 
 the_blacklist = load_blacklist(BLACKLIST)
 
-
-
+def is_domain_blocked(host , the_blacklist):
+    for blocked_domain in the_blacklist:
+        if host == blocked_domain:
+            return True
+        if host.endswith("."+blocked_domain):
+            return True
+        return False
 
 
 
@@ -170,9 +175,8 @@ def handle_client(client_sock):
     logger.info(f"[REQUEST] {client_addr[0]} requested {method} {host}:{port}")
 
     # blacklist check
-    if host in the_blacklist:
+    if is_domain_blocked(host , the_blacklist):
         logger.warning(f"[BLOCKED] {client_addr[0]} tried accessing {host}")
-        
  
         forbidden_response = (
             b"HTTP/1.1 403 Forbidden\r\n"
@@ -247,7 +251,7 @@ def start_proxy_server():
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    
+
     server.bind((HOST,PORT))
     server.listen()
     logger.info(f'[INIT] Server started on {HOST}:{PORT}')
