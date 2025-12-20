@@ -1,7 +1,11 @@
 import socket
 import concurrent.futures
-import os
+import signal
+import sys
 import select
+import logging
+from logging.handlers import RotatingFileHandler
+
 
 HOST  = '0.0.0.0'
 PORT = 56000
@@ -10,6 +14,19 @@ TIMEOUT = 10
 BLACKLIST = "config/blocked_domains.txt"
 MAX_CONTENT_LENGTH = 10*1024*1024
 
+# logger setup
+logger = logging.getLogger('ProxyServer')
+logger.setLevel(logging.INFO)
+
+file_handler = RotatingFileHandler('proxy.log', maxBytes=5*1024*1024, backupCount=2)
+file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+file_handler.setFormatter(file_formatter)
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(file_formatter)
+
+logger.addHandler(file_handler)
+logger.addHandler(console_handler)
 
 
 
@@ -85,6 +102,7 @@ def parse_request(request_data_raw):
 
 def http_bridge(client_sock, host, port, request_data):
 
+    total_bytes = 0
     remote_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     remote_sock.settimeout(TIMEOUT)
     try:
@@ -95,15 +113,19 @@ def http_bridge(client_sock, host, port, request_data):
             response_packet = remote_sock.recv(4096)
             if len(response_packet) > 0:
                 client_sock.sendall(response_packet)
+                total_bytes += len(response_packet)
             else:
                 break
+        logger.info(f"[ALLOWED] {host}:{port} - {total_bytes} bytes transferred")
     except socket.error as err:
-        print(f'Bridge failed with error: {err}')
+        logger.error(f"[ERROR] Bridge to {host} failed: {err}")
     finally:
         remote_sock.close()
         client_sock.close()
-        
-        print(f'connection closed')
+
+
+
+
 
 def https_tunnel(client_sock, remote_sock):
     sockets_to_watch = [client_sock, remote_sock]
@@ -130,6 +152,8 @@ def https_tunnel(client_sock, remote_sock):
 
 
 def handle_client(client_sock):
+    client_addr = client_sock.getpeername()
+
     request_data = b""
     while b"\r\n\r\n" not in request_data:
         packet = client_sock.recv(4096)
@@ -139,14 +163,16 @@ def handle_client(client_sock):
     
     if request_data:
         method, host, port , path = parse_request(request_data)
-        host = host.lower()
     if not host:
         client_sock.close()
         return
+    host = host.lower()
+    logger.info(f"[REQUEST] {client_addr[0]} requested {method} {host}:{port}")
 
     # blacklist check
     if host in the_blacklist:
-        print(f'[BLOCKED] {host}')
+        logger.warning(f"[BLOCKED] {client_addr[0]} tried accessing {host}")
+        
  
         forbidden_response = (
             b"HTTP/1.1 403 Forbidden\r\n"
@@ -168,7 +194,7 @@ def handle_client(client_sock):
                 content_length = int(line.split(":")[1].strip())
                 break
         if content_length > MAX_CONTENT_LENGTH:
-            print(f"[BLOCKED] Upload too large: {content_length} bytes")
+            logger.warning(f"[BLOCKED] Upload too large: {content_length} bytes")
             client_sock.sendall(b"HTTP/1.1 413 Payload Too Large\r\n\r\n")
             client_sock.close()
             return
@@ -185,6 +211,7 @@ def handle_client(client_sock):
 
             
     if method == "CONNECT":
+        logger.info(f"[HTTPS] Tunnel starting for {host}:{port}")
         remote_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             remote_sock.connect((host,port))
@@ -209,18 +236,27 @@ def handle_client(client_sock):
 
 
 
-
+def handle_shutdown(signum, frame):
+    print("\n[SHUTDOWN] Gracefully stopping the server...")
+    logging.info("[SHUTDOWN] Server stopping...")
+    sys.exit(0)
 
 def start_proxy_server():
+    signal.signal(signal.SIGINT, handle_shutdown)
+    signal.signal(signal.SIGTERM, handle_shutdown)
+
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    
     server.bind((HOST,PORT))
     server.listen()
-    print('[INTITIATION] Server started and listening')
+    logger.info(f'[INIT] Server started on {HOST}:{PORT}')
     with concurrent.futures.ThreadPoolExecutor() as exec:
         while True:
             client_sock, addr = server.accept()
+            logger.debug(f'[CONN] Connection from {addr}')
             exec.submit(handle_client, client_sock)
-            print(f'[CONNECTION] Connection established with {client_sock}')
+            
 
 if __name__ == "__main__":
     start_proxy_server()
