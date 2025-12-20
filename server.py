@@ -255,7 +255,7 @@ def start_proxy_server():
     server.bind((HOST,PORT))
     server.listen()
     logger.info(f'[INIT] Server started on {HOST}:{PORT}')
-    with concurrent.futures.ThreadPoolExecutor() as exec:
+    with concurrent.futures.ThreadPoolExecutor(max_workers= MAX_THREADS) as exec:
         while True:
             client_sock, addr = server.accept()
             logger.debug(f'[CONN] Connection from {addr}')
