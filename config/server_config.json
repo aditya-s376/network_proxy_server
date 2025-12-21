@@ -1,0 +1,18 @@
+{
+    "server": {
+        "host": "0.0.0.0",
+        "port": 56000,
+        "max_threads": 25,
+        "socket_timeout": 10,
+        "max_content_length_mb": 10
+    },
+    "paths": {
+        "log_file": "proxy.log",
+        "blacklist": "config/blocked_domains.txt"
+    },
+    "logging": {
+        "level": "INFO",
+        "max_file_size_mb": 5,
+        "backup_count": 2
+    }
+}
