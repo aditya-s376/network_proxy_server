@@ -4,6 +4,7 @@ import signal
 import sys
 import select
 import logging
+import os
 from logging.handlers import RotatingFileHandler
 
 # specifications of the server
@@ -11,7 +12,9 @@ HOST  = '0.0.0.0'
 PORT = 56000
 MAX_THREADS = 25
 TIMEOUT = 10
-BLACKLIST = "config/blocked_domains.txt"
+# Get the path relative to the script location
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+BLACKLIST = os.path.join(os.path.dirname(SCRIPT_DIR), "config", "blocked_domains.txt")
 MAX_CONTENT_LENGTH = 10*1024*1024
 
 # logger setup
