@@ -7,19 +7,23 @@ import logging
 import os
 from logging.handlers import RotatingFileHandler
 
-# specifications of the server
-HOST  = '0.0.0.0'
-PORT = 56000
-MAX_THREADS = 25
-TIMEOUT = 10
+# specifications of the server, using os.getenv() to make k8s compliant
+HOST  = os.getenv('PROXY_HOST', '0.0.0.0')
+PORT = int(os.getenv('PROXY_PORT' , 56000))
+MAX_THREADS = int(os.getenv('PROXY_MAX_THREADS' , 25))
+TIMEOUT = int(os.getenv('PROXY_TIMEOOUT' , 10))
+
+
 # Get the path relative to the script location
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BLACKLIST = os.path.join(os.path.dirname(SCRIPT_DIR), "config", "blocked_domains.txt")
+DEFAULT_BLACKLIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config", "blocked_domains.txt")
+BLACKLIST = os.getenv('PROXY_BLACKLIST_PATH' , DEFAULT_BLACKLIST)
 MAX_CONTENT_LENGTH = 10*1024*1024
 
 # logger setup
 logger = logging.getLogger('ProxyServer')
 logger.setLevel(logging.INFO)
+
 
 
 
@@ -32,7 +36,7 @@ console_handler = logging.StreamHandler()
 console_handler.setFormatter(file_formatter)
 
 logger.addHandler(file_handler) #handles file writing
-logger.addHandler(console_handler) #handles console printing
+logger.addHandler(console_handler) #handles console printing, used in k8s
 
 
 

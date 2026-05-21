@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  custom-proxy:
+    build: 
+      context: ./src
+      dockerfile: Dockerfile
+    container_name: python-proxy
+    # PUNCHING A HOLE IN THE BOX (Port Mapping)
+    # HostMachinePort : ContainerPort
+    ports:
+      - "56000:56000"
+    # SLIDING A FOLDER INTO THE BOX (Volume Mounting)
+    # HostMachinePath : ContainerPath
+    volumes:
+      - ./config:/app/config
+    # INJECTING CONFIGURATION
+    environment:
+      - PROXY_HOST=0.0.0.0
+      - PROXY_PORT=56000
+      - PROXY_BLACKLIST_PATH=/app/config/blocked_domains.txt
+    # Container networking: 'bridge' is the default. It creates a private 
+    # internal network for your containers.
+    networks:
+      - proxy-net
+
+networks:
+  proxy-net:
+    driver: bridge
